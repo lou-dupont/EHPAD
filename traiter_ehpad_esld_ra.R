@@ -1,3 +1,5 @@
+options(stringsAsFactors = F)
+
 library(XML)
 library(curl)
 library(plyr)
@@ -6,6 +8,7 @@ library(rjson)
 codesDep = formatC(c(1:95, 97), width = 2, flag = 0)
 
 recupererInfos = function(urlSource, codeDep){
+  
   #Chargement de la page 0 pour récupérer le nombre de pages
   urlDep = sprintf(urlSource, codeDep, 0)
   conDep <- curl(urlDep)
@@ -30,14 +33,23 @@ recupererInfos = function(urlSource, codeDep){
     nodes <- getNodeSet(pageParsee, "//script")[11]
     nodeInfos = gsub('.*(\\{"results"\\:\\[\\{.*\\}\\]\\}).*', '\\1', xmlValue(nodes[[1]]))
     
-    infos = do.call(rbind.data.frame, fromJSON(nodeInfos))
-    infosDep[[p+1]] = infos
+    results = fromJSON(nodeInfos)$results
+    results = data.table(t(sapply(results, function(x) unlist(lapply(x, function(x) ifelse(is.null(x),'',x))))))
+    
+    infosDep[[p+1]] = results
   } 
 
-  infosDep = do.call(rbind.fill, infosDep)
-  colnames(infosDep) = gsub('results\\.', '', colnames(infosDep))
+  infosDep = do.call(rbind.data.frame, infosDep)
   infosDep$map = NULL
+  infosDep$tags2 = NULL
   return(infosDep)
+}
+
+construireTableau = function (url) {
+  tableau = Map(function (x) { recupererInfos(url, x) }, codesDep)
+  tableau = do.call(rbind.fill, tableau)
+  tableau = unique(tableau)
+  return(tableau)
 }
 
 #### Hébergements *4, Accueil de jour
@@ -47,65 +59,35 @@ urlESLD = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-esld/%s/0?page=
 urlResidenceAutonomie = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-residence-autonomie/%s/0?page=%s"
 urlAccueilJour = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-accueil-de-jour/%s/0?page=%s"
 urlInfoRepit = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-points-dinformation-et-plateformes-de-repit/%s/0?page=%s"
-
-
-infosESLD = Map(function(codesDep) {recupererInfos(urlESLD, codesDep)}, codesDep)
-infosESLD = do.call(rbind.fill, infosESLD)
-
-infosHebPermanent = Map(function(codesDep) {recupererInfos(urlEHPAD_perm, codesDep)}, codesDep)
-infosHebPermanent = do.call(rbind.fill, infosHebPermanent)
-
-infosHebTemp = Map(function(codesDep) {recupererInfos(urlEHPAD_temp, codesDep)}, codesDep)
-infosHebTemp = do.call(rbind.fill, infosHebTemp)
-
-infosResAutonomie = Map(function(codesDep) {recupererInfos(urlResidenceAutonomie, codesDep)}, codesDep)
-infosResAutonomie = do.call(rbind.fill, infosResAutonomie)
+urlSoinsDomicile = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-soins-et-services-a-domicile/%s/%s"
 
 # Empilement de tous les types d'établissement
-infosTousEtablissements = rbind.fill(infosHebPermanent, 
-                                     infosHebTemp, 
-                                     infosESLD, 
-                                     infosResAutonomie,
-                                     infosAccueilJour)
+infosESLD = construireTableau(urlESLD)
+infosHebPermanent = construireTableau(urlEHPAD_perm)
+infosHebTemp = construireTableau(urlEHPAD_temp)
+infosResAutonomie = construireTableau(urlResidenceAutonomie)
+infosTousEtablissements = rbind.fill(infosHebPermanent, infosHebTemp, infosESLD, infosResAutonomie)
 infosTousEtablissements = unique(infosTousEtablissements)
-infosTousEtablissements$map = NULL
-infosTousEtablissements$tags2 = NULL
-
 # Pour replacer les colonnes à un meilleur endroit // à améliorer
-cdep = which(colnames(infosTousEtablissements) %in% c('gestionnaire', 'dateMaj'))
-infosTousEtablissements = infosTousEtablissements[, c(1:5, 38,39, 6:37, 40:ncol(infosTousEtablissements))]
-write.csv(infosTousEtablissements, 'base_ehpad_esld_ra.csv', row.names = F, 
-          fileEncoding = "UTF-8", quote = TRUE)
+infosTousEtablissements = infosTousEtablissements[, c(1:5, 38, 39, 6:37, 40:ncol(infosTousEtablissements))]
+write.csv(infosTousEtablissements, 'base_ehpad_esld_ra.csv', row.names = F, fileEncoding = "UTF-8", quote = TRUE)
+print(nrow(infosTousEtablissements))
 
 #### Accueil de jour
-infosAccueilJour = Map(function(codesDep) {recupererInfos(urlAccueilJour, codesDep)}, codesDep)
-infosAccueilJour = do.call(rbind.fill, infosAccueilJour)
-infosAccueilJour = unique(infosAccueilJour)
-infosAccueilJour$tags2 = NULL
-infosAccueilJour$map = NULL
+infosAccueilJour = construireTableau(urlAccueilJour)
 infosAccueilJour$dateMaj = NULL
 infosAccueilJour = infosAccueilJour[, !grepl('prixHeb|prixF|tarif|cap_log|pres', colnames(infosAccueilJour), ignore.case = T)]
-write.csv(infosAccueilJour, 'base_accueil_jour.csv', row.names = F,
-           fileEncoding = "UTF-8", quote = TRUE)
+write.csv(infosAccueilJour, 'base_accueil_jour.csv', row.names = F, fileEncoding = "UTF-8", quote = TRUE)
+print(nrow(infosAccueilJour))
 
 #### Centre CLIC et repit
-infosInfoRepit = Map(function(codesDep) {recupererInfos(urlInfoRepit, codesDep)}, codesDep)
-infosInfoRepit = do.call(rbind.fill, infosInfoRepit)
-infosInfoRepit = unique(infosInfoRepit)
-infosInfoRepit$tags2 = NULL
-infosInfoRepit$map = NULL
-write.csv(infosInfoRepit, 'base_infos_repit.csv', row.names = F,
-           fileEncoding = "UTF-8", quote = TRUE)
+infosInfoRepit = construireTableau(urlInfoRepit)
+write.csv(infosInfoRepit, 'base_clic_repit.csv', row.names = F, fileEncoding = "UTF-8", quote = TRUE)
+print(nrow(infosInfoRepit))
 
 #### Soins à domicile
-urlSoinsDomicile = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-soins-et-services-a-domicile/%s/%s"
-infosSoinsDomicile = Map(function(codesDep) {recupererInfos(urlSoinsDomicile, codesDep)}, codesDep)
-infosSoinsDomicile = do.call(rbind.fill, infosSoinsDomicile)
-infosSoinsDomicile = unique(infosSoinsDomicile)
-infosSoinsDomicile$map = NULL
-infosSoinsDomicile$tags2 = NULL
+infosSoinsDomicile = construireTableau(urlSoinsDomicile)
 infosSoinsDomicile$is_esa = NULL
 infosSoinsDomicile$is_handi_vieil = NULL
-write.csv(infosSoinsDomicile, 'base_soins_domicile.csv', row.names = F,
-           fileEncoding = "UTF-8", quote = TRUE)
-
+write.csv(infosSoinsDomicile, 'base_soins_domicile.csv', row.names = F, fileEncoding = "UTF-8", quote = TRUE)
+print(nrow(infosSoinsDomicile))
