@@ -1,4 +1,5 @@
 options(stringsAsFactors = F)
+options(java.parameters = "-Xmx1g")
 
 library(curl)
 library(data.table)
