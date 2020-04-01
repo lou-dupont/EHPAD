@@ -10,41 +10,39 @@ library(XML)
 
 codesDep = formatC(c(1:95, 97), width = 2, flag = 0)
 
-recupererInfos = function(urlSource, codeDep){
+lireUnePage = function (urlPage) {
   
-  #Chargement de la page 0 pour recuperer le nombre de pages
+  con = curl(urlPage)
+  pageParsee = htmlTreeParse(readLines(con), useInternalNodes = TRUE)
+  close(con)
+  nodes = getNodeSet(pageParsee, "//script")[11]
+  value = xmlValue(nodes[[1]])
+  nodeInfos = gsub('.*(\\{"results"\\:\\[.*\\]\\}).*', '\\1', value)
+  results = fromJSON(nodeInfos)$results
+  results = data.table(t(sapply(results, function(x) unlist(lapply(x, function(x) ifelse(is.null(x), '', x))))))
+  return(results)
+}
+
+recupererInfos = function(urlSource, codeDep) {
+  
+  # Chargement de la page 0 pour recuperer le nombre de pages
   urlDep = sprintf(urlSource, codeDep, 0)
-  conDep <- curl(urlDep)
+  conDep = curl(urlDep)
   pageParsee = htmlTreeParse(readLines(conDep), useInternalNodes = TRUE)
   close(conDep)
-  
   nbResultats = as.numeric(xpathSApply(pageParsee, "//h2[@id='cnsa_results-total']/b", xmlValue))
-  nbPages = trunc(nbResultats/10)
   cat(sprintf("Il y a %s hebergements dans le departement %s.\n", nbResultats, codeDep))
-  
-  if (nbResultats == 0){
+  if (nbResultats == 0) {
     return(NULL)
   }
-  
-  # Boucle sur les pages
-  infosDep = list()
-  for (p in 0:nbPages){
-    urlPage = sprintf(urlSource, codeDep, p)
-    con <- curl(urlPage)
-    pageParsee = htmlTreeParse(readLines(con), useInternalNodes = TRUE)
-    close(con)
-    nodes <- getNodeSet(pageParsee, "//script")[11]
-    nodeInfos = gsub('.*(\\{"results"\\:\\[\\{.*\\}\\]\\}).*', '\\1', xmlValue(nodes[[1]]))
-    
-    results = fromJSON(nodeInfos)$results
-    results = data.table(t(sapply(results, function(x) unlist(lapply(x, function(x) ifelse(is.null(x), '', x))))))
-    
-    infosDep[[p+1]] = results
-  } 
-
+  dernierePage = trunc((nbResultats - 1)/10)
+  infosDep = Map(function (p) { return(lireUnePage(sprintf(urlSource, codeDep, p))) }, 0:dernierePage)
   infosDep = do.call(rbind.data.frame, infosDep)
   infosDep$map = NULL
   infosDep$tags2 = NULL
+  if (nrow(infosDep) != nbResultats) {
+    cat("ERREUR. Le tableau contient ", nrow(infosDep), " résultats pour le département ", codeDep, "\n")
+  }
   return(infosDep)
 }
 
@@ -68,7 +66,7 @@ urlESLD = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-esld/%s/0?page=
 urlResidenceAutonomie = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-residence-autonomie/%s/0?page=%s"
 urlAccueilJour = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-accueil-de-jour/%s/0?page=%s"
 urlInfoRepit = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-points-dinformation-et-plateformes-de-repit/%s/0?page=%s"
-urlSoinsDomicile = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-soins-et-services-a-domicile/%s/%s"
+urlSoinsDomicile = "https://www.pour-les-personnes-agees.gouv.fr/annuaire-soins-et-services-a-domicile/%s/0?page=%s"
 
 # Empilement de tous les types d'etablissement
 infosESLD = construireTableau(urlESLD)
